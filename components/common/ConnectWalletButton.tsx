@@ -2,6 +2,7 @@
 
 import { useAccount, useConnect } from 'wagmi';
 import { InjectedConnector } from 'wagmi/connectors/injected';
+import Button from './Button';
 
 const ConnectWalletButton: React.FC = () => {
   const { address, isConnected } = useAccount();
@@ -9,16 +10,12 @@ const ConnectWalletButton: React.FC = () => {
     connector: new InjectedConnector(),
   });
 
-  const btnClass =
-    'bg-blue-500 hover:bg-blue-700 text-white text-sm font-semibold py-2 px-4 rounded-lg';
   return (
     <div>
       {isConnected ? (
-        <div className={btnClass}>{address?.substring(0, 8)}...</div>
+        <Button>{address?.substring(0, 8)}...</Button>
       ) : (
-        <button className={btnClass} onClick={() => connect()}>
-          Connect Wallet
-        </button>
+        <Button onClick={() => connect()}>Connect Wallet</Button>
       )}
     </div>
   );
