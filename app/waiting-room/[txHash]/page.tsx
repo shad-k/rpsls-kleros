@@ -30,12 +30,8 @@ const WaitingPage = ({ params }: { params: { txHash: string } }) => {
         `waiting-room-${params.txHash}`
       );
 
-      console.log(gameInMemory);
       if (gameInMemory) {
-        localStorage.setItem(
-          `game-${data?.contractAddress}`,
-          JSON.stringify(gameInMemory)
-        );
+        localStorage.setItem(`game-${data?.contractAddress}`, gameInMemory);
         localStorage.removeItem(`waiting-room-${params.txHash}`);
       }
       setShowGameLink(true);
