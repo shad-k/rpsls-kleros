@@ -1,19 +1,16 @@
 import React from 'react';
 import {
-  sepolia,
   useContractWrite,
-  useNetwork,
   usePrepareContractWrite,
-  useSwitchNetwork,
+  useWaitForTransaction,
 } from 'wagmi';
 
 import { moves } from '@/utils/constants';
-import Button from '../common/Button';
 import RPSAbi from '@/contracts/RPS.json';
 import Spinner from '../common/Spinner';
 import { GameState } from '@/types';
 import getTimeLeft from '@/utils/getTimeLeft';
-import { parseEther } from 'viem';
+import ContractCallButton from '../common/ContractCallButton';
 
 type Player2GameDisplay = {
   gameContract: `0x${string}`;
@@ -43,7 +40,27 @@ const Player2GameDisplay: React.FC<Player2GameDisplay> = ({
 
   const [move, setMove] = React.useState<number>();
   const [showSpinner, setShowSpinner] = React.useState(false);
+  const [timeLeft, setTimeLeft] = React.useState(
+    getTimeLeft(timeout, lastAction)
+  );
 
+  const [waitForPlayTxHash, setWaitForPlayTxHash] =
+    React.useState<`0x${string}`>();
+
+  const { data: waitForPlayTxData } = useWaitForTransaction({
+    hash: waitForPlayTxHash,
+    confirmations: 1,
+  });
+
+  const [waitForClaimTxHash, setWaitForClaimTxHash] =
+    React.useState<`0x${string}`>();
+
+  const { data: waitForClaimTxData } = useWaitForTransaction({
+    hash: waitForClaimTxHash,
+    confirmations: 1,
+  });
+
+  // play move contract call
   const { config } = usePrepareContractWrite({
     address: move ? gameContract : undefined,
     abi: RPSAbi,
@@ -51,48 +68,51 @@ const Player2GameDisplay: React.FC<Player2GameDisplay> = ({
     args: [move],
     value: stake,
     onError(error) {
-      alert(error.message);
+      alert((error.cause as any)?.shortMessage ?? error.message);
       setShowSpinner(false);
-    },
-    onSuccess() {
-      refetch();
     },
   });
   const { write } = useContractWrite({
     ...config,
-    onError(error) {
-      alert(error.message);
-      setShowSpinner(false);
-    },
-    onSuccess() {
-      refetch();
+    onSettled(data, error) {
+      if (error) {
+        alert((error.cause as any)?.shortMessage ?? error.message);
+        setShowSpinner(false);
+        return;
+      }
+      setWaitForPlayTxHash(data?.hash);
     },
   });
 
+  // claim stake contract call
   const { config: claimStakeConfig } = usePrepareContractWrite({
     address: gameState.canPlayer2ClaimStake ? gameContract : undefined,
     abi: RPSAbi,
     functionName: 'j1Timeout',
-    async onSuccess() {
-      await refetch();
+    onError(error) {
+      alert((error.cause as any)?.shortMessage ?? error.message);
       setShowSpinner(false);
     },
   });
 
   const { write: claimStake } = useContractWrite({
     ...claimStakeConfig,
-  });
-
-  const { chain } = useNetwork();
-  const { switchNetwork } = useSwitchNetwork({
-    onSuccess() {
-      write?.();
+    onSettled(data, error) {
+      if (error) {
+        alert((error.cause as any)?.shortMessage ?? error.message);
+        setShowSpinner(false);
+        return;
+      }
+      setWaitForClaimTxHash(data?.hash);
     },
   });
 
-  const [timeLeft, setTimeLeft] = React.useState(
-    getTimeLeft(timeout, lastAction)
-  );
+  React.useEffect(() => {
+    if (waitForPlayTxData || waitForClaimTxData) {
+      refetch();
+      setShowSpinner(false);
+    }
+  }, [waitForPlayTxData, refetch, waitForClaimTxData]);
 
   React.useEffect(() => {
     if (timeLeft > 0) {
@@ -103,15 +123,10 @@ const Player2GameDisplay: React.FC<Player2GameDisplay> = ({
     }
   }, [timeLeft, timeout, lastAction]);
 
-  const handleSubmit = async (event: React.MouseEvent<HTMLFormElement>) => {
-    event.preventDefault();
+  const handleSubmit = React.useCallback(async () => {
     setShowSpinner(true);
-    if (chain?.id !== sepolia.id) {
-      await switchNetwork?.(sepolia.id);
-    } else {
-      write?.();
-    }
-  };
+    await write?.();
+  }, [write]);
 
   const handleClaimStake = React.useCallback(async () => {
     setShowSpinner(true);
@@ -151,7 +166,9 @@ const Player2GameDisplay: React.FC<Player2GameDisplay> = ({
       )}
       {hasPlayer2Moved && !hasPlayer1Revealed && (
         <div className="text-xl">
-          <span className="font-light">Time left for player 1: </span>
+          <span className="font-light">
+            Time left for player 1 to reveal move:{' '}
+          </span>
           <span className="font-bold">
             {timeLeft > 0 ? (
               `${Math.floor(timeLeft / 1000 / 60)}:${
@@ -159,64 +176,69 @@ const Player2GameDisplay: React.FC<Player2GameDisplay> = ({
               }`
             ) : (
               <div className="inline-flex items-center space-x-4">
-                <span>
-                  Time is up!{' '}
-                  {canPlayer2ClaimStake && (
-                    <Button
-                      disabled={!canPlayer2ClaimStake || showSpinner}
-                      onClick={handleClaimStake}
-                    >
-                      {showSpinner ? <Spinner /> : 'Claim Stake'}
-                    </Button>
-                  )}
-                </span>
+                <span>Time is up!</span>
+                {canPlayer2ClaimStake && (
+                  <ContractCallButton
+                    disabled={!canPlayer2ClaimStake || showSpinner}
+                    onClick={handleClaimStake}
+                  >
+                    {showSpinner ? <Spinner /> : 'Claim Stake'}
+                  </ContractCallButton>
+                )}
               </div>
             )}
           </span>
+          {hasPlayer2Moved && !hasPlayer1Revealed && timeLeft <= 0 && (
+            <p className="text-xs w-full">
+              (please refresh if you don&apos;t see the button to claim stake)
+            </p>
+          )}
         </div>
       )}
-      <div className="text-xl">
-        {!hasPlayer2Moved ? (
-          <>
-            <div className="flex items-center font-bold">
-              <span className="font-light">Select your move:</span>
-              <div className="flex space-x-2 ml-8">
-                {moves.map((move, index) => {
-                  return (
-                    <button key={move} onClick={() => setMove(index + 1)}>
-                      <input
-                        type="radio"
-                        id={move}
-                        name="move"
-                        value={move}
-                        className="peer appearance-none"
-                      />
-                      <label
-                        htmlFor={move}
-                        className="border border-gray-500 rounded-lg p-2 text-sm peer-checked:bg-white peer-checked:text-black cursor-pointer"
-                      >
-                        {move}
-                      </label>
-                    </button>
-                  );
-                })}
+      {!hasPlayer1ClaimedStake && (
+        <div className="text-xl">
+          {!hasPlayer2Moved ? (
+            <>
+              <div className="flex items-center font-bold">
+                <span className="font-light">Select your move:</span>
+                <div className="flex space-x-2 ml-8">
+                  {moves.map((move, index) => {
+                    return (
+                      <button key={move} onClick={() => setMove(index + 1)}>
+                        <input
+                          type="radio"
+                          id={move}
+                          name="move"
+                          value={move}
+                          className="peer appearance-none"
+                        />
+                        <label
+                          htmlFor={move}
+                          className="border border-gray-500 rounded-lg p-2 text-sm peer-checked:bg-white peer-checked:text-black cursor-pointer"
+                        >
+                          {move}
+                        </label>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-            <Button
-              onClick={handleSubmit}
-              className="mt-3"
-              disabled={showSpinner}
-            >
-              {showSpinner ? <Spinner /> : 'Submit Move'}
-            </Button>
-          </>
-        ) : (
-          <>
-            <span className="font-light">Your move: </span>
-            <span className="font-bold italic">{moves[player2Move - 1]}</span>
-          </>
-        )}
-      </div>
+              <ContractCallButton
+                onClick={() => handleSubmit()}
+                className="mt-3"
+                disabled={showSpinner}
+              >
+                {showSpinner ? <Spinner /> : 'Submit Move'}
+              </ContractCallButton>
+            </>
+          ) : (
+            <>
+              <span className="font-light">Your move: </span>
+              <span className="font-bold italic">{moves[player2Move - 1]}</span>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 };

@@ -1,19 +1,16 @@
 import React from 'react';
-import { useContractWrite, usePrepareContractWrite } from 'wagmi';
+import {
+  useContractWrite,
+  usePrepareContractWrite,
+  useWaitForTransaction,
+} from 'wagmi';
 
 import { moves } from '@/utils/constants';
-import Button from '../common/Button';
 import RPSAbi from '@/contracts/RPS.json';
 import Spinner from '../common/Spinner';
 import { GameState } from '@/types';
 import getTimeLeft from '@/utils/getTimeLeft';
-import {
-  encodeAbiParameters,
-  encodePacked,
-  keccak256,
-  parseAbiParameters,
-  toHex,
-} from 'viem';
+import ContractCallButton from '../common/ContractCallButton';
 
 type Player1GameDisplay = {
   gameContract: `0x${string}`;
@@ -40,17 +37,25 @@ const Player1GameDisplay: React.FC<Player1GameDisplay> = ({
     canPlayer1ClaimStake,
   } = gameState;
 
-  const { config } = usePrepareContractWrite({
-    address: gameState.canPlayer1ClaimStake ? gameContract : undefined,
-    abi: RPSAbi,
-    functionName: 'j2Timeout',
+  const [showSpinner, setShowSpinner] = React.useState(false);
+  const [timeLeft, setTimeLeft] = React.useState(
+    getTimeLeft(timeout, lastAction)
+  );
+
+  const [waitForSolveTxHash, setWaitForSolveTxHash] =
+    React.useState<`0x${string}`>();
+
+  const { data: waitForSolveTxData } = useWaitForTransaction({
+    hash: waitForSolveTxHash,
+    confirmations: 1,
   });
 
-  const { write: claimStake } = useContractWrite({
-    ...config,
-    onSuccess() {
-      refetch();
-    },
+  const [waitForClaimTxHash, setWaitForClaimTxHash] =
+    React.useState<`0x${string}`>();
+
+  const { data: waitForClaimTxData } = useWaitForTransaction({
+    hash: waitForClaimTxHash,
+    confirmations: 1,
   });
 
   const getPlayer1Move = React.useCallback(() => {
@@ -71,6 +76,7 @@ const Player1GameDisplay: React.FC<Player1GameDisplay> = ({
     return null;
   }, [gameContract]);
 
+  // reveal move contract call
   const { config: revealMoveConfig } = usePrepareContractWrite({
     address: gameState.hasPlayer2Moved ? gameContract : undefined,
     abi: RPSAbi,
@@ -79,20 +85,53 @@ const Player1GameDisplay: React.FC<Player1GameDisplay> = ({
       moves.indexOf(getPlayer1Move() as string) + 1,
       BigInt(getPlayer1Salt()),
     ],
+    onError(error) {
+      alert((error.cause as any)?.shortMessage ?? error.message);
+      setShowSpinner(false);
+    },
   });
 
   const { write: revealMove } = useContractWrite({
     ...revealMoveConfig,
-    onSuccess() {
-      refetch();
+    onSettled(data, error) {
+      if (error) {
+        alert((error.cause as any)?.shortMessage ?? error.message);
+        setShowSpinner(false);
+        return;
+      }
+      setWaitForSolveTxHash(data?.hash);
     },
   });
 
-  const [timeLeft, setTimeLeft] = React.useState(
-    getTimeLeft(timeout, lastAction)
-  );
+  // claim stake contract call
+  const { config } = usePrepareContractWrite({
+    address: gameState.canPlayer1ClaimStake ? gameContract : undefined,
+    abi: RPSAbi,
+    functionName: 'j2Timeout',
+    onError(error) {
+      alert((error.cause as any)?.shortMessage ?? error.message);
+      setShowSpinner(false);
+    },
+  });
 
-  const [showSpinner, setShowSpinner] = React.useState(false);
+  const { write: claimStake } = useContractWrite({
+    ...config,
+    onSettled(data, error) {
+      if (error) {
+        alert((error.cause as any)?.shortMessage ?? error.message);
+        setShowSpinner(false);
+        return;
+      }
+      setWaitForClaimTxHash(data?.hash);
+    },
+  });
+
+  React.useEffect(() => {
+    if (waitForSolveTxData || waitForClaimTxData) {
+      refetch();
+      setShowSpinner(false);
+    }
+  }, [waitForSolveTxData, refetch, waitForClaimTxData]);
 
   React.useEffect(() => {
     if (timeLeft > 0) {
@@ -108,13 +147,18 @@ const Player1GameDisplay: React.FC<Player1GameDisplay> = ({
     await claimStake?.();
   }, [claimStake]);
 
+  const handleRevealMove = React.useCallback(async () => {
+    setShowSpinner(true);
+    await revealMove?.();
+  }, [revealMove]);
+
   return (
     <div className="w-2/3 my-8 border border-gray-900 p-4 flex flex-col justify-between space-y-4">
       <div className="text-xl">
         <span className="font-light">Your move: </span>
         <span className="font-bold italic">{getPlayer1Move()}</span>
       </div>
-      {!hasGameTimedOut && (
+      {(!hasGameTimedOut || hasPlayer1Revealed) && (
         <div className="text-xl">
           <span className="font-light">Player 2&apos;s move: </span>
           <span className="font-bold italic">
@@ -137,16 +181,21 @@ const Player1GameDisplay: React.FC<Player1GameDisplay> = ({
               <div className="inline-flex items-center space-x-4">
                 <span>Time is up!</span>
                 {canPlayer1ClaimStake && (
-                  <Button
+                  <ContractCallButton
                     disabled={!canPlayer1ClaimStake || showSpinner}
                     onClick={handleClaimStake}
                   >
                     {showSpinner ? <Spinner /> : 'Claim Stake'}
-                  </Button>
+                  </ContractCallButton>
                 )}
               </div>
             )}
           </span>
+          {!hasPlayer2Moved && timeLeft <= 0 && (
+            <p className="text-xs w-full">
+              (please refresh if you don&apos;t see the button to claim stake)
+            </p>
+          )}
         </div>
       )}
       {hasPlayer2Moved && !hasPlayer1Revealed && (
@@ -172,14 +221,13 @@ const Player1GameDisplay: React.FC<Player1GameDisplay> = ({
           </div>
           {!hasPlayer2ClaimedStake && (
             <div>
-              <Button
-                onClick={() => {
-                  revealMove?.();
-                }}
+              <ContractCallButton
+                onClick={() => handleRevealMove()}
                 className="mx-auto"
+                disabled={showSpinner}
               >
-                Reveal Move
-              </Button>
+                {showSpinner ? <Spinner /> : 'Reveal Move'}
+              </ContractCallButton>
             </div>
           )}
         </>

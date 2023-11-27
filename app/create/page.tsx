@@ -38,6 +38,12 @@ function CreatePage() {
 
     const salt = generateSalt(16);
 
+    if (!stake || !player2 || !move) {
+      alert('Please fill in all fields');
+      setIsSubmitting(false);
+      return;
+    }
+
     if (stake && Number(stake) <= 0) {
       alert('Stake must be greater than 0');
       setIsSubmitting(false);
