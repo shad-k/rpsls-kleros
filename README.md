@@ -8,6 +8,8 @@ This is a [Next.js](https://nextjs.org/) project bootstrapped with [`create-next
 npm install
 ```
 
+Create a `.env.local` file and add the environment variable `NEXT_PUBLIC_ALCHEMY_API_KEY` with it's value as the Alchemy API key.
+
 and then
 
 ```bash
